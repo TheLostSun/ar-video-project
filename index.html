@@ -11,13 +11,19 @@ body {
   overflow: hidden;
   font-family: sans-serif;
   background: black;
+  color: white;
+  text-align: center;
 }
 
-#startARBtn {
+#uiContainer {
   position: absolute;
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
+  z-index: 10;
+}
+
+#startARBtn {
   padding: 18px 30px;
   font-size: 18px;
   background: #007bff;
@@ -25,14 +31,27 @@ body {
   border: none;
   border-radius: 10px;
   cursor: pointer;
-  z-index: 10;
+}
+
+#infoText {
+  margin-top: 15px;
+  font-size: 14px;
+  max-width: 300px;
+  line-height: 1.4em;
+  opacity: 0.9;
 }
 </style>
 </head>
 
 <body>
 
-<button id="startARBtn">Start AR</button>
+<div id="uiContainer">
+  <button id="startARBtn">Start AR</button>
+  <div id="infoText">
+    Hold the phone steady and look towards a flat surface.<br>
+    To reset, reload the page.
+  </div>
+</div>
 
 <script type="module">
 
@@ -46,15 +65,10 @@ let hitTestSource = null;
 let viewerSpace = null;
 
 let video, videoTexture, videoMesh;
-
-let resetSprite, restartSprite, instructionSprite;
-
 let placed = false;
 
-const raycaster = new THREE.Raycaster();
-const tempMatrix = new THREE.Matrix4();
-
 const startBtn = document.getElementById("startARBtn");
+const uiContainer = document.getElementById("uiContainer");
 
 init();
 
@@ -68,13 +82,14 @@ function init() {
   renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.xr.enabled = true;
+
   document.body.appendChild(renderer.domElement);
 
   controller = renderer.xr.getController(0);
   controller.addEventListener('select', onSelect);
   scene.add(controller);
 
-  // Reticle
+  // Reticle (UNCHANGED)
   const ringGeo = new THREE.RingGeometry(0.08, 0.1, 32);
   ringGeo.rotateX(-Math.PI / 2);
 
@@ -102,87 +117,25 @@ async function startAR() {
   renderer.xr.setReferenceSpaceType('local');
   await renderer.xr.setSession(session);
 
-  // FAST hit-test setup
+  // FAST hit-test initialization
   viewerSpace = await session.requestReferenceSpace('viewer');
-  hitTestSource = await session.requestHitTestSource({ space: viewerSpace });
+  hitTestSource = await session.requestHitTestSource({
+    space: viewerSpace
+  });
 
   session.addEventListener('end', () => {
     hitTestSource = null;
     viewerSpace = null;
   });
 
-  startBtn.remove();
-
-  createInstructionSprite();
+  // Remove UI
+  uiContainer.remove();
 }
 
-/* ================= SPRITES ================= */
-
-function createTextSprite(text, bg = "rgba(0,0,0,0.7)") {
-
-  const canvas = document.createElement("canvas");
-  const ctx = canvas.getContext("2d");
-
-  canvas.width = 1024;
-  canvas.height = 256;
-
-  ctx.fillStyle = bg;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-  ctx.fillStyle = "white";
-  ctx.font = "bold 70px Arial";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText(text, canvas.width / 2, canvas.height / 2);
-
-  const texture = new THREE.CanvasTexture(canvas);
-  const material = new THREE.SpriteMaterial({
-    map: texture,
-    depthTest: false
-  });
-
-  const sprite = new THREE.Sprite(material);
-  sprite.scale.set(1.5, 0.35, 1);
-
-  return sprite;
-}
-
-function createInstructionSprite() {
-
-  instructionSprite = createTextSprite(
-    "Hold your phone steady and look towards a flat surface"
-  );
-
-  instructionSprite.position.set(0, 0, -1.5);
-  scene.add(instructionSprite);
-}
-
-function createButtons() {
-
-  resetSprite = createTextSprite("Reset", "#d9534f");
-  restartSprite = createTextSprite("Restart", "#5cb85c");
-
-  resetSprite.scale.set(0.7, 0.25, 1);
-  restartSprite.scale.set(0.7, 0.25, 1);
-
-  resetSprite.position.copy(videoMesh.position);
-  restartSprite.position.copy(videoMesh.position);
-
-  resetSprite.position.y -= 0.6;
-  restartSprite.position.y -= 0.6;
-
-  resetSprite.position.x -= 0.5;
-  restartSprite.position.x += 0.5;
-
-  scene.add(resetSprite);
-  scene.add(restartSprite);
-}
-
-/* ================= SELECT ================= */
+/* ================= PLACE VIDEO ================= */
 
 function onSelect() {
 
-  // Place video
   if (!placed && reticle.visible) {
 
     const geometry = new THREE.PlaneGeometry(1.2, 0.7);
@@ -203,6 +156,8 @@ function onSelect() {
     });
 
     videoMesh = new THREE.Mesh(geometry, material);
+
+    // Keep your original placement behavior
     videoMesh.position.setFromMatrixPosition(reticle.matrix);
     videoMesh.lookAt(camera.position);
 
@@ -210,58 +165,6 @@ function onSelect() {
 
     placed = true;
     reticle.visible = false;
-
-    if (instructionSprite) scene.remove(instructionSprite);
-
-    createButtons();
-  }
-
-  // Button Interaction
-  else if (placed) {
-
-    tempMatrix.identity().extractRotation(controller.matrixWorld);
-
-    raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
-    raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
-
-    const intersects = raycaster.intersectObjects([resetSprite, restartSprite]);
-
-    if (intersects.length > 0) {
-
-      const selected = intersects[0].object;
-
-      if (selected === resetSprite) resetPlacement();
-      if (selected === restartSprite) restartVideo();
-    }
-  }
-}
-
-/* ================= RESET ================= */
-
-function resetPlacement() {
-
-  if (videoMesh) scene.remove(videoMesh);
-
-  if (video) {
-    video.pause();
-    video.currentTime = 0;
-  }
-
-  if (resetSprite) scene.remove(resetSprite);
-  if (restartSprite) scene.remove(restartSprite);
-
-  placed = false;
-  reticle.visible = true;
-
-  createInstructionSprite();
-}
-
-/* ================= RESTART ================= */
-
-function restartVideo() {
-  if (video) {
-    video.currentTime = 0;
-    video.play();
   }
 }
 
@@ -285,12 +188,6 @@ function render(timestamp, frame) {
     } else {
       reticle.visible = false;
     }
-  }
-
-  // Keep instruction in front of camera
-  if (instructionSprite && !placed) {
-    instructionSprite.position.set(0, 0, -1.5);
-    instructionSprite.quaternion.copy(camera.quaternion);
   }
 
   renderer.render(scene, camera);
