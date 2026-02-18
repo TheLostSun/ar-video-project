@@ -90,7 +90,7 @@ function init() {
   scene.add(controller);
 
   // Reticle (UNCHANGED)
-  const ringGeo = new THREE.RingGeometry(0.4, 0.5, 32);
+  const ringGeo = new THREE.RingGeometry(0.2, 0.25, 16);
   ringGeo.rotateX(-Math.PI / 2);
 
   const ringMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
@@ -138,7 +138,7 @@ function onSelect() {
 
   if (!placed && reticle.visible) {
 
-    const geometry = new THREE.PlaneGeometry(3.2, 1.8);
+    const geometry = new THREE.PlaneGeometry(1.6, 0.9);
 
 
     video = document.createElement("video");
