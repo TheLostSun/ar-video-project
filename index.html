@@ -7,52 +7,26 @@
 
 <style>
 body {
-  margin:0;
-  overflow:hidden;
-  font-family:sans-serif;
-  background:#000;
+  margin: 0;
+  overflow: hidden;
+  font-family: sans-serif;
+  background: black;
 }
 
-/* Centered blue start button */
 #startARBtn {
-  position:absolute;
-  top:50%;
-  left:50%;
-  transform:translate(-50%, -50%);
-  padding:16px 28px;
-  font-size:18px;
-  background:#007bff;
-  color:white;
-  border:none;
-  border-radius:8px;
-  cursor:pointer;
-  z-index:10;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  padding: 18px 30px;
+  font-size: 18px;
+  background: #007bff;
+  color: white;
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  z-index: 10;
 }
-
-/* Instruction text */
-#instruction {
-  position:absolute;
-  top:20px;
-  width:100%;
-  text-align:center;
-  color:white;
-  font-size:18px;
-  display:none;
-  z-index:10;
-}
-
-/* Bottom buttons */
-#resetBtn, #restartBtn {
-  position:absolute;
-  bottom:20px;
-  padding:12px 20px;
-  font-size:16px;
-  display:none;
-  z-index:10;
-}
-
-#resetBtn { left:20px; }
-#restartBtn { right:20px; }
 </style>
 </head>
 
@@ -60,142 +34,229 @@ body {
 
 <button id="startARBtn">Start AR</button>
 
-<div id="instruction">
-Hold your phone steady and look towards a flat surface
-</div>
-
-<button id="resetBtn">Reset Placement</button>
-<button id="restartBtn">Restart Video</button>
-
 <script type="module">
+
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160/build/three.module.js';
 
 let camera, scene, renderer;
 let controller;
+
 let reticle;
-let video, videoTexture, videoMesh;
 let hitTestSource = null;
-let hitTestSourceRequested = false;
+let viewerSpace = null;
+
+let video, videoTexture, videoMesh;
+
+let resetSprite, restartSprite, instructionSprite;
+
 let placed = false;
 
+const raycaster = new THREE.Raycaster();
+const tempMatrix = new THREE.Matrix4();
+
 const startBtn = document.getElementById("startARBtn");
-const instruction = document.getElementById("instruction");
-const resetBtn = document.getElementById("resetBtn");
-const restartBtn = document.getElementById("restartBtn");
 
 init();
+
+/* ================= INIT ================= */
 
 function init() {
 
   scene = new THREE.Scene();
   camera = new THREE.PerspectiveCamera();
 
-  renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.xr.enabled = true;
-
   document.body.appendChild(renderer.domElement);
 
   controller = renderer.xr.getController(0);
   controller.addEventListener('select', onSelect);
   scene.add(controller);
 
-  /* Reticle */
-  const geometry = new THREE.RingGeometry(0.08, 0.1, 32);
-  geometry.rotateX(-Math.PI / 2);
-  const material = new THREE.MeshBasicMaterial({ color:0xffffff });
-  reticle = new THREE.Mesh(geometry, material);
+  // Reticle
+  const ringGeo = new THREE.RingGeometry(0.08, 0.1, 32);
+  ringGeo.rotateX(-Math.PI / 2);
+
+  const ringMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+
+  reticle = new THREE.Mesh(ringGeo, ringMat);
   reticle.matrixAutoUpdate = false;
   reticle.visible = false;
-  scene.add(reticle);
 
-  resetBtn.onclick = resetPlacement;
-  restartBtn.onclick = restartVideo;
+  scene.add(reticle);
 
   renderer.setAnimationLoop(render);
 
   startBtn.onclick = startAR;
 }
 
+/* ================= START AR ================= */
+
 async function startAR() {
 
   const session = await navigator.xr.requestSession('immersive-ar', {
-    requiredFeatures: ['hit-test'],
-    domOverlay: { root: document.body }   // ✅ keeps UI visible
+    requiredFeatures: ['hit-test']
   });
 
   renderer.xr.setReferenceSpaceType('local');
   await renderer.xr.setSession(session);
 
-  startBtn.style.display = "none";
-  instruction.style.display = "block";
-}
+  // FAST hit-test setup
+  viewerSpace = await session.requestReferenceSpace('viewer');
+  hitTestSource = await session.requestHitTestSource({ space: viewerSpace });
 
-/* Placement */
-function onSelect() {
-
-  if (!reticle.visible || placed) return;
-
-  const geometry = new THREE.PlaneGeometry(1.2, 0.7);
-
-  video = document.createElement('video');
-  video.src = "video.mp4";
-  video.loop = true;
-  video.muted = true;
-  video.playsInline = true;
-  video.play();
-
-  videoTexture = new THREE.VideoTexture(video);
-  videoTexture.colorSpace = THREE.SRGBColorSpace;
-
-  const material = new THREE.MeshBasicMaterial({
-    map: videoTexture,
-    side: THREE.DoubleSide
+  session.addEventListener('end', () => {
+    hitTestSource = null;
+    viewerSpace = null;
   });
 
-  videoMesh = new THREE.Mesh(geometry, material);
+  startBtn.remove();
 
-  /* Position from reticle */
-  videoMesh.position.setFromMatrixPosition(reticle.matrix);
-
-  /* Perpendicular to surface (NOT camera facing) */
-  const rotation = new THREE.Quaternion();
-  reticle.matrix.decompose(
-    new THREE.Vector3(),
-    rotation,
-    new THREE.Vector3()
-  );
-  videoMesh.quaternion.copy(rotation);
-
-  scene.add(videoMesh);
-
-  placed = true;
-  reticle.visible = false;
-  instruction.style.display = "none";
-
-  resetBtn.style.display = "block";
-  restartBtn.style.display = "block";
+  createInstructionSprite();
 }
+
+/* ================= SPRITES ================= */
+
+function createTextSprite(text, bg = "rgba(0,0,0,0.7)") {
+
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d");
+
+  canvas.width = 1024;
+  canvas.height = 256;
+
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  ctx.fillStyle = "white";
+  ctx.font = "bold 70px Arial";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  const material = new THREE.SpriteMaterial({
+    map: texture,
+    depthTest: false
+  });
+
+  const sprite = new THREE.Sprite(material);
+  sprite.scale.set(1.5, 0.35, 1);
+
+  return sprite;
+}
+
+function createInstructionSprite() {
+
+  instructionSprite = createTextSprite(
+    "Hold your phone steady and look towards a flat surface"
+  );
+
+  instructionSprite.position.set(0, 0, -1.5);
+  scene.add(instructionSprite);
+}
+
+function createButtons() {
+
+  resetSprite = createTextSprite("Reset", "#d9534f");
+  restartSprite = createTextSprite("Restart", "#5cb85c");
+
+  resetSprite.scale.set(0.7, 0.25, 1);
+  restartSprite.scale.set(0.7, 0.25, 1);
+
+  resetSprite.position.copy(videoMesh.position);
+  restartSprite.position.copy(videoMesh.position);
+
+  resetSprite.position.y -= 0.6;
+  restartSprite.position.y -= 0.6;
+
+  resetSprite.position.x -= 0.5;
+  restartSprite.position.x += 0.5;
+
+  scene.add(resetSprite);
+  scene.add(restartSprite);
+}
+
+/* ================= SELECT ================= */
+
+function onSelect() {
+
+  // Place video
+  if (!placed && reticle.visible) {
+
+    const geometry = new THREE.PlaneGeometry(1.2, 0.7);
+
+    video = document.createElement("video");
+    video.src = "video.mp4";
+    video.loop = true;
+    video.muted = true;
+    video.playsInline = true;
+    video.play();
+
+    videoTexture = new THREE.VideoTexture(video);
+    videoTexture.colorSpace = THREE.SRGBColorSpace;
+
+    const material = new THREE.MeshBasicMaterial({
+      map: videoTexture,
+      side: THREE.DoubleSide
+    });
+
+    videoMesh = new THREE.Mesh(geometry, material);
+    videoMesh.position.setFromMatrixPosition(reticle.matrix);
+    videoMesh.lookAt(camera.position);
+
+    scene.add(videoMesh);
+
+    placed = true;
+    reticle.visible = false;
+
+    if (instructionSprite) scene.remove(instructionSprite);
+
+    createButtons();
+  }
+
+  // Button Interaction
+  else if (placed) {
+
+    tempMatrix.identity().extractRotation(controller.matrixWorld);
+
+    raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
+    raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
+
+    const intersects = raycaster.intersectObjects([resetSprite, restartSprite]);
+
+    if (intersects.length > 0) {
+
+      const selected = intersects[0].object;
+
+      if (selected === resetSprite) resetPlacement();
+      if (selected === restartSprite) restartVideo();
+    }
+  }
+}
+
+/* ================= RESET ================= */
 
 function resetPlacement() {
 
-  if (videoMesh) {
-    scene.remove(videoMesh);
-    videoMesh = null;
-  }
+  if (videoMesh) scene.remove(videoMesh);
 
   if (video) {
     video.pause();
     video.currentTime = 0;
   }
 
+  if (resetSprite) scene.remove(resetSprite);
+  if (restartSprite) scene.remove(restartSprite);
+
   placed = false;
   reticle.visible = true;
-  instruction.style.display = "block";
 
-  resetBtn.style.display = "none";
-  restartBtn.style.display = "none";
+  createInstructionSprite();
 }
+
+/* ================= RESTART ================= */
 
 function restartVideo() {
   if (video) {
@@ -204,49 +265,37 @@ function restartVideo() {
   }
 }
 
+/* ================= RENDER ================= */
+
 function render(timestamp, frame) {
 
-  if (frame) {
+  if (frame && hitTestSource && !placed) {
 
     const referenceSpace = renderer.xr.getReferenceSpace();
-    const session = renderer.xr.getSession();
+    const hitTestResults = frame.getHitTestResults(hitTestSource);
 
-    if (!hitTestSourceRequested) {
+    if (hitTestResults.length > 0) {
 
-      session.requestReferenceSpace('viewer').then((space)=>{
-        session.requestHitTestSource({ space:space }).then((source)=>{
-          hitTestSource = source;
-        });
-      });
+      const hit = hitTestResults[0];
+      const pose = hit.getPose(referenceSpace);
 
-      session.addEventListener('end', ()=>{
-        hitTestSourceRequested = false;
-        hitTestSource = null;
-      });
+      reticle.visible = true;
+      reticle.matrix.fromArray(pose.transform.matrix);
 
-      hitTestSourceRequested = true;
+    } else {
+      reticle.visible = false;
     }
+  }
 
-    if (hitTestSource && !placed) {
-
-      const hitTestResults = frame.getHitTestResults(hitTestSource);
-
-      if (hitTestResults.length) {
-
-        const hit = hitTestResults[0];
-        const pose = hit.getPose(referenceSpace);
-
-        reticle.visible = true;
-        reticle.matrix.fromArray(pose.transform.matrix);
-
-      } else {
-        reticle.visible = false;
-      }
-    }
+  // Keep instruction in front of camera
+  if (instructionSprite && !placed) {
+    instructionSprite.position.set(0, 0, -1.5);
+    instructionSprite.quaternion.copy(camera.quaternion);
   }
 
   renderer.render(scene, camera);
 }
+
 </script>
 
 </body>
