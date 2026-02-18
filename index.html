@@ -4,29 +4,71 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AR Video Placement</title>
-<style>
-body { margin:0; overflow:hidden; font-family:sans-serif; }
 
-#resetBtn, #restartBtn {
-  position: absolute;
-  bottom: 20px;
-  padding: 12px 20px;
-  font-size: 16px;
-  display: none;
+<style>
+body {
+  margin:0;
+  overflow:hidden;
+  font-family:sans-serif;
+  background:#000;
 }
 
-#resetBtn { left: 20px; }
-#restartBtn { right: 20px; }
+/* Centered blue start button */
+#startARBtn {
+  position:absolute;
+  top:50%;
+  left:50%;
+  transform:translate(-50%, -50%);
+  padding:16px 28px;
+  font-size:18px;
+  background:#007bff;
+  color:white;
+  border:none;
+  border-radius:8px;
+  cursor:pointer;
+  z-index:10;
+}
+
+/* Instruction text */
+#instruction {
+  position:absolute;
+  top:20px;
+  width:100%;
+  text-align:center;
+  color:white;
+  font-size:18px;
+  display:none;
+  z-index:10;
+}
+
+/* Bottom buttons */
+#resetBtn, #restartBtn {
+  position:absolute;
+  bottom:20px;
+  padding:12px 20px;
+  font-size:16px;
+  display:none;
+  z-index:10;
+}
+
+#resetBtn { left:20px; }
+#restartBtn { right:20px; }
 </style>
 </head>
+
 <body>
+
+<button id="startARBtn">Start AR</button>
+
+<div id="instruction">
+Hold your phone steady and look towards a flat surface
+</div>
 
 <button id="resetBtn">Reset Placement</button>
 <button id="restartBtn">Restart Video</button>
 
 <script type="module">
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160/build/three.module.js';
-import { ARButton } from 'https://cdn.jsdelivr.net/npm/three@0.160/examples/jsm/webxr/ARButton.js';
 
 let camera, scene, renderer;
 let controller;
@@ -36,6 +78,8 @@ let hitTestSource = null;
 let hitTestSourceRequested = false;
 let placed = false;
 
+const startBtn = document.getElementById("startARBtn");
+const instruction = document.getElementById("instruction");
 const resetBtn = document.getElementById("resetBtn");
 const restartBtn = document.getElementById("restartBtn");
 
@@ -44,38 +88,50 @@ init();
 function init() {
 
   scene = new THREE.Scene();
-
   camera = new THREE.PerspectiveCamera();
 
-  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.xr.enabled = true;
-  document.body.appendChild(renderer.domElement);
 
-  document.body.appendChild(
-    ARButton.createButton(renderer, {
-      requiredFeatures: ['hit-test']
-    })
-  );
+  document.body.appendChild(renderer.domElement);
 
   controller = renderer.xr.getController(0);
   controller.addEventListener('select', onSelect);
   scene.add(controller);
 
+  /* Reticle */
   const geometry = new THREE.RingGeometry(0.08, 0.1, 32);
   geometry.rotateX(-Math.PI / 2);
-  const material = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  const material = new THREE.MeshBasicMaterial({ color:0xffffff });
   reticle = new THREE.Mesh(geometry, material);
   reticle.matrixAutoUpdate = false;
   reticle.visible = false;
   scene.add(reticle);
 
-  renderer.setAnimationLoop(render);
-
   resetBtn.onclick = resetPlacement;
   restartBtn.onclick = restartVideo;
+
+  renderer.setAnimationLoop(render);
+
+  startBtn.onclick = startAR;
 }
 
+async function startAR() {
+
+  const session = await navigator.xr.requestSession('immersive-ar', {
+    requiredFeatures: ['hit-test'],
+    domOverlay: { root: document.body }   // ✅ keeps UI visible
+  });
+
+  renderer.xr.setReferenceSpaceType('local');
+  await renderer.xr.setSession(session);
+
+  startBtn.style.display = "none";
+  instruction.style.display = "block";
+}
+
+/* Placement */
 function onSelect() {
 
   if (!reticle.visible || placed) return;
@@ -99,13 +155,23 @@ function onSelect() {
 
   videoMesh = new THREE.Mesh(geometry, material);
 
+  /* Position from reticle */
   videoMesh.position.setFromMatrixPosition(reticle.matrix);
-  videoMesh.lookAt(camera.position);
+
+  /* Perpendicular to surface (NOT camera facing) */
+  const rotation = new THREE.Quaternion();
+  reticle.matrix.decompose(
+    new THREE.Vector3(),
+    rotation,
+    new THREE.Vector3()
+  );
+  videoMesh.quaternion.copy(rotation);
 
   scene.add(videoMesh);
 
   placed = true;
   reticle.visible = false;
+  instruction.style.display = "none";
 
   resetBtn.style.display = "block";
   restartBtn.style.display = "block";
@@ -125,6 +191,7 @@ function resetPlacement() {
 
   placed = false;
   reticle.visible = true;
+  instruction.style.display = "block";
 
   resetBtn.style.display = "none";
   restartBtn.style.display = "none";
@@ -146,13 +213,13 @@ function render(timestamp, frame) {
 
     if (!hitTestSourceRequested) {
 
-      session.requestReferenceSpace('viewer').then((space) => {
-        session.requestHitTestSource({ space: space }).then((source) => {
+      session.requestReferenceSpace('viewer').then((space)=>{
+        session.requestHitTestSource({ space:space }).then((source)=>{
           hitTestSource = source;
         });
       });
 
-      session.addEventListener('end', () => {
+      session.addEventListener('end', ()=>{
         hitTestSourceRequested = false;
         hitTestSource = null;
       });
